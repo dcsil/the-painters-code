@@ -23,7 +23,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       connected: true,
-      tables: tables.map(t => t.table_name),
+      tables: tables.map((t: any) => t.table_name),
       userCount,
       environment: {
         isVercel: !!process.env.VERCEL,
