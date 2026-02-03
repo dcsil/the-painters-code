@@ -33,15 +33,29 @@ export default function HistoryView({
 
   useEffect(() => {
     loadCompletedPresentations();
-  }, [presentations]);
+  }, [presentations, teams]);
 
   const loadCompletedPresentations = async () => {
     const completed = presentations.filter(p => p.status === 'completed');
     const withDetails: PresentationWithGrades[] = [];
 
     for (const presentation of completed) {
-      const team = teams.find(t => t.id === presentation.team_id);
-      if (!team) continue;
+      let team = teams.find(t => t.id === presentation.team_id);
+
+      // Fallback if team not found (shouldn't happen, but prevents data loss)
+      if (!team) {
+        console.warn(`Team ${presentation.team_id} not found for presentation ${presentation.id}`);
+        team = {
+          id: presentation.team_id,
+          name: `Team ${presentation.team_id} (Missing)`,
+          members: '[]',
+          membersList: [],
+          status: 'completed',
+          session_id: presentation.session_id,
+          created_at: '',
+          updated_at: ''
+        } as TeamWithMembers;
+      }
 
       try {
         const response = await fetch(`/api/grades?presentationId=${presentation.id}`);
@@ -67,7 +81,7 @@ export default function HistoryView({
     // Load grades into state
     const scoreMap: { [key: number]: number } = {};
     presentation.grades.forEach(g => {
-      scoreMap[g.criterion_id] = g.score;
+      scoreMap[g.criterion_id] = Number(g.score);
     });
     setScores(scoreMap);
 
@@ -128,14 +142,14 @@ export default function HistoryView({
   };
 
   const calculateTotalScore = (grades: Grade[]) => {
-    return grades.reduce((sum, g) => sum + g.score, 0);
+    return grades.reduce((sum, g) => sum + Number(g.score), 0);
   };
 
   const getMaxTotalScore = () => {
-    return criteria.reduce((sum, c) => sum + c.max_score, 0);
+    return criteria.reduce((sum, c) => sum + Number(c.max_score), 0);
   };
 
-  const currentEditTotal = criteria.reduce((sum, c) => sum + (scores[c.id] || 0), 0);
+  const currentEditTotal = criteria.reduce((sum, c) => sum + (Number(scores[c.id]) || 0), 0);
 
   return (
     <div className="space-y-6">

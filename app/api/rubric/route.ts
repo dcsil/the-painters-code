@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
 // POST: Add rubric criteria to session
@@ -17,32 +17,30 @@ export async function POST(request: Request) {
     }
 
     // Check if rubric is locked
-    const sessionData = db.prepare('SELECT rubric_locked FROM sessions WHERE id = ?').get(sessionId) as any;
+    const sessionDataResult = await sql`
+      SELECT rubric_locked FROM sessions WHERE id = ${sessionId}
+    `;
+    const sessionData = sessionDataResult[0];
+
     if (sessionData?.rubric_locked) {
       return NextResponse.json({ error: 'Rubric is locked' }, { status: 400 });
     }
 
     const addedCriteria = [];
 
-    for (let i = 0; i < criteria.length; i++) {
-      const criterion = criteria[i];
-      const result = db
-        .prepare(
-          'INSERT INTO rubric_criteria (session_id, name, description, max_score, weight, order_index) VALUES (?, ?, ?, ?, ?, ?)'
-        )
-        .run(
-          sessionId,
-          criterion.name,
-          criterion.description || '',
-          criterion.maxScore,
-          criterion.weight || 100,
-          i
-        );
+    // Use transaction for inserting all criteria
+    await sql.begin(async sql => {
+      for (let i = 0; i < criteria.length; i++) {
+        const criterion = criteria[i];
+        const result = await sql`
+          INSERT INTO rubric_criteria (session_id, name, description, max_score, weight, order_index)
+          VALUES (${sessionId}, ${criterion.name}, ${criterion.description || ''}, ${criterion.maxScore}, ${criterion.weight || 100}, ${i})
+          RETURNING *
+        `;
 
-      const criterionId = result.lastInsertRowid as number;
-      const newCriterion = db.prepare('SELECT * FROM rubric_criteria WHERE id = ?').get(criterionId);
-      addedCriteria.push(newCriterion);
-    }
+        addedCriteria.push(result[0]);
+      }
+    });
 
     return NextResponse.json({ criteria: addedCriteria }, { status: 201 });
   } catch (error) {
@@ -59,9 +57,12 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const templates = db
-      .prepare('SELECT * FROM rubric_templates WHERE user_id = ? ORDER BY created_at DESC')
-      .all(session.userId);
+    const templatesResult = await sql`
+      SELECT * FROM rubric_templates
+      WHERE user_id = ${session.userId}
+      ORDER BY created_at DESC
+    `;
+    const templates = templatesResult;
 
     return NextResponse.json({ templates });
   } catch (error) {

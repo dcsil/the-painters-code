@@ -37,6 +37,9 @@ export default function PresentationPhase({
   const [privateNotes, setPrivateNotes] = useState('');
   const [showGrading, setShowGrading] = useState(false);
 
+  // Rubric display state
+  const [showRubric, setShowRubric] = useState(false);
+
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load saved timer state if presentation was in progress
@@ -47,6 +50,11 @@ export default function PresentationPhase({
         setSavedTimerState(state);
         setTimerPhase(state.phase);
         setElapsedTime(state.elapsedTime);
+
+        // AUTO-RESUME: If timer was active (in presentation or qa phase), restart it
+        if (state.phase === 'presentation' || state.phase === 'qa') {
+          setIsRunning(true);
+        }
       } else {
         setSavedTimerState(null);
         setTimerPhase(null);
@@ -216,20 +224,58 @@ export default function PresentationPhase({
     }
   };
 
-  const handleResumeFromSaved = () => {
-    if (savedTimerState) {
+  const handleResumeFromSaved = async () => {
+    if (savedTimerState && activePresentation) {
       setTimerPhase(savedTimerState.phase);
       setElapsedTime(savedTimerState.elapsedTime);
       setIsRunning(true);
       setSavedTimerState(null);
+
+      // Update presentation status back to 'presenting' to hide emergency buttons
+      try {
+        await fetch('/api/presentations', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            presentationId: activePresentation.id,
+            status: 'presenting'
+          })
+        });
+
+        // Update parent state using onPresentationUpdated
+        onPresentationUpdated({
+          ...activePresentation,
+          status: 'presenting'
+        });
+      } catch (error) {
+        console.error('Failed to update presentation status:', error);
+      }
     }
   };
 
-  const handleStartFresh = () => {
+  const handleStartFresh = async () => {
     setTimerPhase('presentation');
     setElapsedTime(0);
     setIsRunning(true);
     setSavedTimerState(null);
+
+    // Update presentation status to in_progress
+    if (activePresentation) {
+      await fetch('/api/presentations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          presentationId: activePresentation.id,
+          status: 'in_progress',
+          timerState: { phase: 'presentation', elapsedTime: 0 }
+        })
+      });
+
+      // Update parent state
+      if (activeTeam) {
+        onTeamSelected(activeTeam, { ...activePresentation, status: 'in_progress' });
+      }
+    }
   };
 
   const handleStopAndGrade = () => {
@@ -242,6 +288,7 @@ export default function PresentationPhase({
 
   const handleEmergencyStop = async () => {
     setIsRunning(false);
+    setTimerPhase(null);  // Clear timerPhase to prevent initial buttons from showing
     if (activePresentation) {
       await saveTimerState(elapsedTime);
       await fetch('/api/presentations', {
@@ -265,6 +312,7 @@ export default function PresentationPhase({
     if (!activeTeam || !activePresentation) return;
 
     try {
+      // Reset team to pending status
       await fetch('/api/teams', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -274,13 +322,12 @@ export default function PresentationPhase({
         }),
       });
 
+      // DELETE the presentation record so a fresh one is created when team is picked again
       await fetch('/api/presentations', {
-        method: 'PATCH',
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          presentationId: activePresentation.id,
-          status: 'not_started',
-          timerState: null,
+          presentationId: activePresentation.id
         }),
       });
 
@@ -402,8 +449,8 @@ export default function PresentationPhase({
 
   const pendingCount = teams.filter(t => t.status === 'pending').length;
   const completedCount = teams.filter(t => t.status === 'completed').length;
-  const totalScore = criteria.reduce((sum, c) => sum + (scores[c.id] || 0), 0);
-  const maxTotalScore = criteria.reduce((sum, c) => sum + c.max_score, 0);
+  const totalScore = criteria.reduce((sum, c) => sum + (Number(scores[c.id]) || 0), 0);
+  const maxTotalScore = criteria.reduce((sum, c) => sum + Number(c.max_score), 0);
 
   return (
     <div className="space-y-6">
@@ -523,6 +570,34 @@ export default function PresentationPhase({
             </div>
           )}
 
+          {/* Rubric Reference - Show during active timer */}
+          {timerPhase && !showGrading && (
+            <div className="mt-4 mb-4 border-t pt-4">
+              <button
+                onClick={() => setShowRubric(!showRubric)}
+                className="text-blue-600 hover:text-blue-800 font-medium text-sm flex items-center gap-2"
+              >
+                <span>{showRubric ? '▼' : '▶'}</span>
+                <span>Rubric Reference</span>
+              </button>
+              {showRubric && (
+                <div className="mt-3 space-y-2">
+                  {criteria.map(criterion => (
+                    <div key={criterion.id} className="p-3 bg-gray-50 rounded border border-gray-200">
+                      <div className="flex justify-between items-start">
+                        <div className="font-semibold text-gray-900">{criterion.name}</div>
+                        <div className="text-sm text-gray-600 font-medium">Max: {criterion.max_score} pts</div>
+                      </div>
+                      {criterion.description && (
+                        <div className="text-sm text-gray-600 mt-1">{criterion.description}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Controls */}
           <div className="flex justify-center gap-4 flex-wrap">
             {!timerPhase && savedTimerState && (
@@ -600,7 +675,13 @@ export default function PresentationPhase({
                   onClick={handleResumeFromSaved}
                   className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700"
                 >
-                  Restart Timer
+                  Resume Timer
+                </button>
+                <button
+                  onClick={handleStartFresh}
+                  className="px-6 py-3 bg-green-600 text-white font-medium rounded-md hover:bg-green-700"
+                >
+                  Reset Timer
                 </button>
                 <button
                   onClick={handleDeferTeam}

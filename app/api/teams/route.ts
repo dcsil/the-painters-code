@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
 // POST: Add teams (bulk or single)
@@ -22,27 +22,34 @@ export async function POST(request: Request) {
     for (const team of teams) {
       try {
         // Check for duplicate team name in this session
-        const existing = db
-          .prepare('SELECT id FROM teams WHERE session_id = ? AND name = ?')
-          .get(sessionId, team.name);
+        const existingResult = await sql`
+          SELECT id FROM teams
+          WHERE session_id = ${sessionId} AND name = ${team.name}
+        `;
 
-        if (existing) {
+        if (existingResult.length > 0) {
           errors.push(`Team "${team.name}" already exists`);
           continue;
         }
 
-        const result = db
-          .prepare('INSERT INTO teams (session_id, name, members, status) VALUES (?, ?, ?, ?)')
-          .run(sessionId, team.name, JSON.stringify(team.members), 'pending');
+        // Use transaction for team + presentation creation
+        await sql.begin(async sql => {
+          // Insert team
+          const teamResult = await sql`
+            INSERT INTO teams (session_id, name, members, status)
+            VALUES (${sessionId}, ${team.name}, ${JSON.stringify(team.members)}, 'pending')
+            RETURNING *
+          `;
 
-        const teamId = result.lastInsertRowid as number;
-        const newTeam = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
-        addedTeams.push(newTeam);
+          const newTeam = teamResult[0];
+          addedTeams.push(newTeam);
 
-        // Create a presentation record for this team
-        db.prepare(
-          'INSERT INTO presentations (session_id, team_id, status) VALUES (?, ?, ?)'
-        ).run(sessionId, teamId, 'not_started');
+          // Create a presentation record for this team
+          await sql`
+            INSERT INTO presentations (session_id, team_id, status)
+            VALUES (${sessionId}, ${newTeam.id}, 'not_started')
+          `;
+        });
       } catch (error) {
         errors.push(`Failed to add team "${team.name}"`);
       }
@@ -65,7 +72,7 @@ export async function PATCH(request: Request) {
 
     const { teamId, status } = await request.json();
 
-    db.prepare('UPDATE teams SET status = ? WHERE id = ?').run(status, teamId);
+    await sql`UPDATE teams SET status = ${status} WHERE id = ${teamId}`;
 
     return NextResponse.json({ success: true });
   } catch (error) {

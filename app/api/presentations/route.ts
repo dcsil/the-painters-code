@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
 // PATCH: Update presentation state
@@ -19,50 +19,58 @@ export async function PATCH(request: Request) {
       timerState
     } = await request.json();
 
-    const updates: string[] = [];
-    const values: any[] = [];
-
+    // Update presentation fields individually based on what's provided
     if (status !== undefined) {
-      updates.push('status = ?');
-      values.push(status);
-
-      // Update started_at when status changes to presenting
       if (status === 'presenting') {
-        updates.push('started_at = CURRENT_TIMESTAMP');
-      }
-
-      // Update ended_at when status changes to completed
-      if (status === 'completed') {
-        updates.push('ended_at = CURRENT_TIMESTAMP');
+        await sql`
+          UPDATE presentations
+          SET status = ${status}, started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${presentationId}
+        `;
+      } else if (status === 'completed') {
+        await sql`
+          UPDATE presentations
+          SET status = ${status}, ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${presentationId}
+        `;
+      } else {
+        await sql`
+          UPDATE presentations
+          SET status = ${status}, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${presentationId}
+        `;
       }
     }
 
     if (presentationTimeElapsed !== undefined) {
-      updates.push('presentation_time_elapsed = ?');
-      values.push(presentationTimeElapsed);
+      await sql`
+        UPDATE presentations
+        SET presentation_time_elapsed = ${presentationTimeElapsed}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ${presentationId}
+      `;
     }
 
     if (qaTimeElapsed !== undefined) {
-      updates.push('qa_time_elapsed = ?');
-      values.push(qaTimeElapsed);
+      await sql`
+        UPDATE presentations
+        SET qa_time_elapsed = ${qaTimeElapsed}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ${presentationId}
+      `;
     }
 
     if (timerState !== undefined) {
-      updates.push('timer_state = ?');
-      values.push(JSON.stringify(timerState));
+      await sql`
+        UPDATE presentations
+        SET timer_state = ${JSON.stringify(timerState)}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ${presentationId}
+      `;
     }
 
     // Update team status if teamId is provided
     if (teamId !== undefined && status !== undefined) {
-      db.prepare('UPDATE teams SET status = ? WHERE id = ?').run(status === 'completed' ? 'completed' : status === 'presenting' ? 'presenting' : 'pending', teamId);
+      const teamStatus = status === 'completed' ? 'completed' : status === 'presenting' ? 'presenting' : 'pending';
+      await sql`UPDATE teams SET status = ${teamStatus} WHERE id = ${teamId}`;
     }
-
-    updates.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(presentationId);
-
-    db.prepare(
-      `UPDATE presentations SET ${updates.join(', ')} WHERE id = ?`
-    ).run(...values);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -82,9 +90,11 @@ export async function POST(request: Request) {
     const { sessionId } = await request.json();
 
     // Get all pending teams
-    const pendingTeams = db
-      .prepare('SELECT * FROM teams WHERE session_id = ? AND status = ?')
-      .all(sessionId, 'pending');
+    const pendingTeamsResult = await sql`
+      SELECT * FROM teams
+      WHERE session_id = ${sessionId} AND status = 'pending'
+    `;
+    const pendingTeams = pendingTeamsResult;
 
     if (pendingTeams.length === 0) {
       return NextResponse.json({ error: 'No pending teams available' }, { status: 404 });
@@ -95,24 +105,48 @@ export async function POST(request: Request) {
     const selectedTeam = pendingTeams[randomIndex] as any;
 
     // Check if presentation already exists for this team
-    let presentation = db
-      .prepare('SELECT * FROM presentations WHERE team_id = ?')
-      .get(selectedTeam.id);
+    const presentationResult = await sql`
+      SELECT * FROM presentations WHERE team_id = ${selectedTeam.id}
+    `;
+    let presentation = presentationResult[0];
 
     // Create presentation record if it doesn't exist
     if (!presentation) {
-      const result = db
-        .prepare('INSERT INTO presentations (session_id, team_id) VALUES (?, ?)')
-        .run(sessionId, selectedTeam.id);
-
-      presentation = db
-        .prepare('SELECT * FROM presentations WHERE id = ?')
-        .get(result.lastInsertRowid as number);
+      const newPresentationResult = await sql`
+        INSERT INTO presentations (session_id, team_id)
+        VALUES (${sessionId}, ${selectedTeam.id})
+        RETURNING *
+      `;
+      presentation = newPresentationResult[0];
     }
 
     return NextResponse.json({ team: selectedTeam, presentation });
   } catch (error) {
     console.error('Get random team error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+// DELETE: Delete presentation record (used when deferring a team)
+export async function DELETE(request: Request) {
+  try {
+    const session = await getSession();
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { presentationId } = await request.json();
+
+    if (!presentationId) {
+      return NextResponse.json({ error: 'Presentation ID required' }, { status: 400 });
+    }
+
+    // Delete the presentation record (cascade will handle related grades/feedback)
+    await sql`DELETE FROM presentations WHERE id = ${presentationId}`;
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Delete presentation error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

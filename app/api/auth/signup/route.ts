@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { createToken, setAuthCookie } from '@/lib/auth';
 
 export async function POST(request: Request) {
@@ -23,11 +23,9 @@ export async function POST(request: Request) {
     }
 
     // Check if user already exists
-    const existingUser = db
-      .prepare('SELECT id FROM users WHERE email = ?')
-      .get(email);
+    const existingUsers = await sql`SELECT id FROM users WHERE email = ${email}`;
 
-    if (existingUser) {
+    if (existingUsers.length > 0) {
       return NextResponse.json(
         { error: 'User already exists' },
         { status: 400 }
@@ -38,11 +36,13 @@ export async function POST(request: Request) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create user
-    const result = db
-      .prepare('INSERT INTO users (email, password) VALUES (?, ?)')
-      .run(email, hashedPassword);
+    const result = await sql`
+      INSERT INTO users (email, password)
+      VALUES (${email}, ${hashedPassword})
+      RETURNING id
+    `;
 
-    const userId = result.lastInsertRowid as number;
+    const userId = result[0].id;
 
     // Create token
     const token = await createToken({ userId, email });

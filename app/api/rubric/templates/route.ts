@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 
 // POST: Save rubric template
@@ -16,12 +16,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Name and criteria are required' }, { status: 400 });
     }
 
-    const result = db
-      .prepare('INSERT INTO rubric_templates (user_id, name, criteria) VALUES (?, ?, ?)')
-      .run(session.userId, name, JSON.stringify(criteria));
+    const result = await sql`
+      INSERT INTO rubric_templates (user_id, name, criteria)
+      VALUES (${session.userId}, ${name}, ${JSON.stringify(criteria)})
+      RETURNING *
+    `;
 
-    const templateId = result.lastInsertRowid as number;
-    const template = db.prepare('SELECT * FROM rubric_templates WHERE id = ?').get(templateId);
+    const template = result[0];
 
     return NextResponse.json({ template }, { status: 201 });
   } catch (error) {

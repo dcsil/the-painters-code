@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { createToken, setAuthCookie } from '@/lib/auth';
 import type { User } from '@/types';
 
@@ -17,9 +17,8 @@ export async function POST(request: Request) {
     }
 
     // Find user
-    const user = db
-      .prepare('SELECT * FROM users WHERE email = ?')
-      .get(email) as User | undefined;
+    const users = await sql`SELECT * FROM users WHERE email = ${email}`;
+    const user = users[0] as User | undefined;
 
     if (!user) {
       return NextResponse.json(

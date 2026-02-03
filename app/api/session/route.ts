@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 import type { Session } from '@/types';
 
@@ -12,28 +12,40 @@ export async function GET() {
     }
 
     // Get the most recent session for this user
-    const currentSession = db
-      .prepare('SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1')
-      .get(session.userId) as Session | undefined;
+    const sessionResult = await sql`
+      SELECT * FROM sessions
+      WHERE user_id = ${session.userId}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    const currentSession = sessionResult[0] as Session | undefined;
 
     if (!currentSession) {
       return NextResponse.json({ session: null }, { status: 200 });
     }
 
     // Get teams for this session
-    const teams = db
-      .prepare('SELECT * FROM teams WHERE session_id = ? ORDER BY created_at')
-      .all(currentSession.id);
+    const teamsResult = await sql`
+      SELECT * FROM teams
+      WHERE session_id = ${currentSession.id}
+      ORDER BY created_at
+    `;
+    const teams = teamsResult;
 
     // Get rubric criteria
-    const criteria = db
-      .prepare('SELECT * FROM rubric_criteria WHERE session_id = ? ORDER BY order_index')
-      .all(currentSession.id);
+    const criteriaResult = await sql`
+      SELECT * FROM rubric_criteria
+      WHERE session_id = ${currentSession.id}
+      ORDER BY order_index
+    `;
+    const criteria = criteriaResult;
 
     // Get presentations
-    const presentations = db
-      .prepare('SELECT * FROM presentations WHERE session_id = ?')
-      .all(currentSession.id);
+    const presentationsResult = await sql`
+      SELECT * FROM presentations
+      WHERE session_id = ${currentSession.id}
+    `;
+    const presentations = presentationsResult;
 
     return NextResponse.json({
       session: currentSession,
@@ -64,17 +76,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = db
-      .prepare(
-        'INSERT INTO sessions (user_id, name, presentation_duration, qa_duration) VALUES (?, ?, ?, ?)'
-      )
-      .run(session.userId, name, presentationDuration, qaDuration);
+    const result = await sql`
+      INSERT INTO sessions (user_id, name, presentation_duration, qa_duration)
+      VALUES (${session.userId}, ${name}, ${presentationDuration}, ${qaDuration})
+      RETURNING *
+    `;
 
-    const sessionId = result.lastInsertRowid as number;
-
-    const newSession = db
-      .prepare('SELECT * FROM sessions WHERE id = ?')
-      .get(sessionId) as Session;
+    const newSession = result[0] as Session;
 
     return NextResponse.json({ session: newSession }, { status: 201 });
   } catch (error) {
@@ -93,8 +101,12 @@ export async function PATCH(request: Request) {
 
     const { sessionId, rubricLocked } = await request.json();
 
-    db.prepare('UPDATE sessions SET rubric_locked = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(rubricLocked ? 1 : 0, sessionId);
+    await sql`
+      UPDATE sessions
+      SET rubric_locked = ${rubricLocked ? true : false},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${sessionId}
+    `;
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -119,16 +131,17 @@ export async function DELETE(request: Request) {
     }
 
     // Verify session belongs to user
-    const sessionData = db
-      .prepare('SELECT * FROM sessions WHERE id = ? AND user_id = ?')
-      .get(sessionId, session.userId);
+    const sessionDataResult = await sql`
+      SELECT * FROM sessions
+      WHERE id = ${sessionId} AND user_id = ${session.userId}
+    `;
 
-    if (!sessionData) {
+    if (sessionDataResult.length === 0) {
       return NextResponse.json({ error: 'Session not found or unauthorized' }, { status: 404 });
     }
 
     // Delete session (cascades to all related data due to foreign key constraints)
-    db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+    await sql`DELETE FROM sessions WHERE id = ${sessionId}`;
 
     return NextResponse.json({ success: true });
   } catch (error) {

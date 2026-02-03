@@ -40,25 +40,31 @@ A command center dashboard for university instructors to manage high-stakes stud
 - **CSV Export**: Download all grades with team info and feedback
 
 ### Persistence
-- **SQLite Database**: All data persists locally
+- **PostgreSQL Database**: All data persists in cloud-hosted database
 - **Browser Crash Recovery**: Automatically resume active presentations with exact timer state
-- **Single Device**: Designed for use on one computer during sessions
+- **Cloud-Deployed**: Accessible from anywhere with internet connection
 
 ## Tech Stack
 
 - **Frontend**: Next.js 15 (React) with TypeScript
 - **Backend**: Next.js API Routes (Node.js)
-- **Database**: SQLite with better-sqlite3
+- **Database**: PostgreSQL with @vercel/postgres
 - **Styling**: Tailwind CSS
 - **Authentication**: JWT with httpOnly cookies
+- **Deployment**: Vercel with GitHub Actions CI/CD
 
-## Getting Started
+## Production Deployment
+
+**Live URL**: [Deployed on Vercel](https://your-app.vercel.app) _(URL will be available after deployment)_
+
+## Getting Started (Local Development)
 
 ### Prerequisites
 - Node.js 18+
-- pnpm (or npm/yarn)
+- npm (or pnpm/yarn)
+- Docker (for local Postgres) OR PostgreSQL installed locally
 
-### Installation
+### Local Installation
 
 1. Clone the repository:
 ```bash
@@ -68,21 +74,33 @@ cd the-painters-code
 
 2. Install dependencies:
 ```bash
-pnpm install
+npm install
 ```
 
-3. Set up environment variables:
+3. Setup Local Postgres:
 ```bash
-# .env.local is already created with a default JWT secret
-# For production, change JWT_SECRET to a secure random string
+# Option A: Using Docker (recommended)
+docker run --name classroom-postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
+
+# Create database
+psql -U postgres -c "CREATE DATABASE classroom_dev;"
+
+# Run migration
+psql -U postgres -d classroom_dev -f scripts/init-postgres.sql
 ```
 
-4. Run the development server:
+4. Set up environment variables (`.env.local`):
+```env
+POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/classroom_dev
+JWT_SECRET=your-secure-random-string-here
+```
+
+5. Run the development server:
 ```bash
-pnpm dev
+npm run dev
 ```
 
-5. Open [http://localhost:3000](http://localhost:3000) in your browser
+6. Open [http://localhost:3000](http://localhost:3000) in your browser
 
 ### First Time Setup
 
@@ -168,11 +186,18 @@ the-painters-code/
 │   ├── PresentationPhase.tsx # Randomizer, timer, grading
 │   └── HistoryView.tsx   # Completed presentations
 ├── lib/
-│   ├── db.ts             # SQLite connection and schema
+│   ├── db.ts             # Postgres connection (@vercel/postgres)
 │   └── auth.ts           # JWT utilities
 ├── types/
 │   └── index.ts          # TypeScript type definitions
-└── classroom.db          # SQLite database (auto-created)
+├── scripts/
+│   └── init-postgres.sql # Database schema migration
+├── .github/
+│   └── workflows/
+│       └── deploy.yml    # GitHub Actions deployment workflow
+└── docs/
+    ├── deployment-justification.md  # Architecture decisions
+    └── architecture-diagram.png     # System architecture diagram
 ```
 
 ## Database Schema
@@ -193,19 +218,54 @@ the-painters-code/
 
 ### Build for Production
 ```bash
-pnpm build
-pnpm start
+npm run build
+npm start
 ```
 
 ### Type Checking
 ```bash
-pnpm tsc --noEmit
+npx tsc --noEmit
 ```
 
 ### Linting
 ```bash
-pnpm lint
+npm run lint
 ```
+
+## Deployment
+
+### Vercel Deployment (Production)
+
+1. **Create Vercel Account**: Sign up at https://vercel.com
+2. **Import Repository**: Connect GitHub repository to Vercel
+3. **Create Postgres Database**:
+   - Go to Storage tab in Vercel dashboard
+   - Create new Postgres database
+   - Connect to project
+   - Run `scripts/init-postgres.sql` in SQL editor
+4. **Set Environment Variables** in Vercel dashboard:
+   - `JWT_SECRET`: Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+   - `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, `POSTGRES_URL_NON_POOLING`: Auto-provided by Vercel
+5. **Deploy**: Push to main branch, Vercel auto-deploys
+
+### GitHub Actions CI/CD
+
+**Workflow**: `.github/workflows/deploy.yml`
+
+**Triggers**: Git tags (e.g., `v1.0.0`)
+
+**Setup GitHub Secrets** (in repo Settings → Secrets → Actions):
+- `VERCEL_TOKEN`: From Vercel Settings → Tokens
+- `VERCEL_ORG_ID`: From `.vercel/project.json` after first manual deploy
+- `VERCEL_PROJECT_ID`: From `.vercel/project.json`
+
+**To Deploy via Workflow**:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Workflow will automatically trigger and deploy to production.
 
 ## Security Notes
 

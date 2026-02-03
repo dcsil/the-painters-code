@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql } from '@/lib/db';
 import { getSession } from '@/lib/auth';
 import type { Team, RubricCriterion, Presentation, Grade, Feedback } from '@/types';
 
@@ -17,39 +17,43 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
-    // Get all completed presentations with their teams
-    const presentations = db
-      .prepare(`
-        SELECT p.*, t.name as team_name, t.members
-        FROM presentations p
-        JOIN teams t ON p.team_id = t.id
-        WHERE p.session_id = ? AND p.status = 'completed'
-        ORDER BY t.name
-      `)
-      .all(sessionId) as any[];
+    // Get all completed presentations with their teams (optimized with JOIN)
+    const presentationsResult = await sql`
+      SELECT p.*, t.name as team_name, t.members
+      FROM presentations p
+      JOIN teams t ON p.team_id = t.id
+      WHERE p.session_id = ${sessionId} AND p.status = 'completed'
+      ORDER BY t.name
+    `;
+    const presentations = presentationsResult;
 
     // Get rubric criteria
-    const criteria = db
-      .prepare('SELECT * FROM rubric_criteria WHERE session_id = ? ORDER BY order_index')
-      .all(sessionId) as RubricCriterion[];
+    const criteria = await sql`
+      SELECT * FROM rubric_criteria
+      WHERE session_id = ${sessionId}
+      ORDER BY order_index
+    ` as RubricCriterion[];
 
     // Build CSV
     const headers = ['Team Name', 'Members', ...criteria.map(c => c.name), 'Total Score', 'Public Feedback', 'Private Notes'];
     const rows = [headers.join(',')];
 
     for (const presentation of presentations) {
-      const grades = db
-        .prepare('SELECT * FROM grades WHERE presentation_id = ?')
-        .all(presentation.id) as Grade[];
+      // Get grades for this presentation
+      const grades = await sql`
+        SELECT * FROM grades WHERE presentation_id = ${presentation.id}
+      ` as Grade[];
 
-      const feedback = db
-        .prepare('SELECT * FROM feedback WHERE presentation_id = ?')
-        .get(presentation.id) as Feedback | undefined;
+      // Get feedback for this presentation
+      const feedbackResult = await sql`
+        SELECT * FROM feedback WHERE presentation_id = ${presentation.id}
+      `;
+      const feedback = feedbackResult[0] as Feedback | undefined;
 
-      const members = JSON.parse(presentation.members).join('; ');
+      const members = JSON.parse(presentation.members as string).join('; ');
       const scoreMap = new Map(grades.map(g => [g.criterion_id, g.score]));
       const scores = criteria.map(c => scoreMap.get(c.id) || 0);
-      const totalScore = scores.reduce((sum, score) => sum + score, 0);
+      const totalScore = scores.reduce((sum, score) => sum + Number(score), 0);
 
       const row = [
         `"${presentation.team_name}"`,
