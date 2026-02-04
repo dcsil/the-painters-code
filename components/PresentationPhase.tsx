@@ -52,7 +52,9 @@ export default function PresentationPhase({
         setElapsedTime(state.elapsedTime);
 
         // AUTO-RESUME: If timer was active (in presentation or qa phase), restart it
-        if (state.phase === 'presentation' || state.phase === 'qa') {
+        // BUT NOT if status is emergency_stopped (user manually stopped it)
+        if ((state.phase === 'presentation' || state.phase === 'qa') &&
+            activePresentation.status !== 'emergency_stopped') {
           setIsRunning(true);
         }
       } else {
@@ -225,9 +227,14 @@ export default function PresentationPhase({
   };
 
   const handleResumeFromSaved = async () => {
-    if (savedTimerState && activePresentation) {
-      setTimerPhase(savedTimerState.phase);
-      setElapsedTime(savedTimerState.elapsedTime);
+    if (activePresentation) {
+      // Resume from either savedTimerState OR current timerPhase/elapsedTime
+      if (savedTimerState) {
+        setTimerPhase(savedTimerState.phase);
+        setElapsedTime(savedTimerState.elapsedTime);
+      }
+      // If no savedTimerState, timerPhase and elapsedTime are already set from useEffect
+
       setIsRunning(true);
       setSavedTimerState(null);
 
